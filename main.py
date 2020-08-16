@@ -1,28 +1,39 @@
+import getpass
+import logging
 import os
 
 import arrow
+import keyring
 import requests
-from ics import Calendar
+from ics import Calendar as icsCalendar
 
+from jiraClient import JiraClient
+
+# TODO: Externalize
+JIRA_URL = "https://jira.crpt.ru/"
+JIRA_USER = "d.sulimchuk"
+PROJECT = "MDLP"
+JIRA_ISSUE = "MDLP-13243"
 DATE_FORMAT = 'YYYY-MM-DD'
-
-CALENDAR_ICS = "https://mail1.crpt.ru/owa/calendar/dba53dda9bbc46448d2ce7be0a6844ea@crpt.ru/dae8e61158fb41c5bbbb4e61faa8b60c10009145121937266577/calendar.ics"
+CALENDAR_ICS = ""
 
 
 def download_calendar():
+    if CALENDAR_ICS == "":
+        raise RuntimeError(f"Provide link to download isc file (CALENDAR_ICS)")
     response = requests.get(CALENDAR_ICS)
     if response.status_code != 200:
-        print(response)
+        logging.error(response)
+        logging.error(f"Headers:{response.headers}")
+        logging.error(f"Body:{response.text}")
+        raise RuntimeError(f"Unable to download calendar from {CALENDAR_ICS}")
     return response.text
 
 
-def log_work(name, begin, duration, desc, location):
-    pass
-
-
 def run():
+    jira_client = init_jira()
     raw_calendar = download_calendar()
-    calendar = Calendar(raw_calendar)
+    calendar = icsCalendar(raw_calendar)
     print(f"Loaded {len(calendar.events)} events")
     cur_date = ask_date()
     events_at_date = list(filter(lambda d: d.begin.date() == cur_date.date(), calendar.events))
@@ -31,21 +42,22 @@ def run():
     else:
         for event in events_at_date:
             location = event.location
-            desc = event.description or "".strip()[0:100] + '...'
+            desc = (event.description or "").strip()[0:200] + '...'
             name = event.name
             begin = event.begin
             duration = event.duration
             cls()
+
             print("##################################################################################")
             print(f"Event: {name}")
             print(f"Date: {begin.naive}")
             print(f"Duration: {duration}")
             print(f"Description: {desc}")
             while True:
-                intent = input(f"Log work (l) or skip (s)?")
+                intent = input(f"Log work to {JIRA_ISSUE} (l) or skip (s)?")
                 if intent == 'l':
-                    log_work(name, begin, duration, desc, location)
-                    print("Logged!")
+                    worklog = jira_client.add_worklog(JIRA_ISSUE, begin, duration.seconds, name, location, desc)
+                    print(f"Logged! {worklog.raw['self']}")
                     break
                 elif intent == 's':
                     print("Skipped!")
@@ -60,9 +72,21 @@ def ask_date():
     return cur_date
 
 
+def init_jira():
+    jira_password = keyring.get_password(JIRA_URL, JIRA_USER)
+    if jira_password is None:
+        jira_password = getpass.getpass(f"Enter password for {JIRA_URL}, user {JIRA_USER}:")
+        jira_client = JiraClient(JIRA_URL, JIRA_USER, jira_password)
+        keyring.set_password(JIRA_URL, JIRA_USER, jira_password)
+        return jira_client
+    jira_client = JiraClient(JIRA_URL, JIRA_USER, jira_password)
+    return jira_client
+
+
 def cls():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
 if __name__ == '__main__':
+    # logging.basicConfig(level=logging.DEBUG)
     run()

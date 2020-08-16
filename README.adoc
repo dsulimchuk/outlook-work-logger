@@ -1,0 +1,7 @@
+*** Открываем календарь https://mail.crpt.ru/owa/#path=/options/calendarpublishing
+
+*** pip install -r requirements.txt
+
+*** python main.py
+
+*** Control Panel\All Control Panel Items\Credential Manager
