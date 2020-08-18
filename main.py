@@ -1,11 +1,15 @@
 import getpass
 import logging
 import os
+from datetime import date
 
 import arrow
+import dateutil
 import keyring
 import requests
-from ics import Calendar as icsCalendar
+from arrow import Arrow
+from ics import Calendar as icsCalendar, Event, Calendar
+from ics.grammar.parse import Container, ContentLine
 
 from jiraClient import JiraClient
 
@@ -13,8 +17,8 @@ from jiraClient import JiraClient
 JIRA_URL = "https://jira.crpt.ru/"
 JIRA_USER = "d.sulimchuk"
 PROJECT = "MDLP"
-JIRA_ISSUE = "MDLP-13243"
 DATE_FORMAT = 'YYYY-MM-DD'
+JIRA_ISSUE = "MDLP-13463"
 CALENDAR_ICS = ""
 
 
@@ -30,33 +34,69 @@ def download_calendar():
     return response.text
 
 
+def get_recurring_rule(extra: Container) -> ContentLine:
+    for x in extra:
+        if x.name == "RRULE":
+            return x
+    return None
+
+
+class LocalEvent:
+    begin: Arrow
+
+    def __init__(self, event: Event, overridden_date: Arrow = None):
+        self.location = event.location
+        self.desc = (event.description or "").strip()[0:200] + '...'
+        self.name = event.name
+        self.begin = overridden_date or event.begin
+        self.duration = event.duration
+
+
+def generate_local_event_from_rr(le: Event, cur_date: date):
+    recurring_rule = get_recurring_rule(le.extra).value
+    rule = dateutil.rrule.rrulestr(recurring_rule, dtstart=le.begin.datetime)
+    # print(rule)
+    for d in rule:
+        # print(d.date())
+        if d.date() == cur_date:
+            return LocalEvent(le, arrow.get(d))
+
+
+def find_recurring_events(calendar: Calendar, cur_date: date):
+    recurring_events = []
+    for e in calendar.events:
+        if get_recurring_rule(e.extra):
+            local_event = generate_local_event_from_rr(e, cur_date)
+            if local_event:
+                recurring_events.append(local_event)
+    return recurring_events
+
+
 def run():
     jira_client = init_jira()
     raw_calendar = download_calendar()
     calendar = icsCalendar(raw_calendar)
     print(f"Loaded {len(calendar.events)} events")
     cur_date = ask_date()
-    events_at_date = list(filter(lambda d: d.begin.date() == cur_date.date(), calendar.events))
-    if len(events_at_date) == 0:
+    events_at_date = [LocalEvent(e) for e in calendar.events if e.begin.date() == cur_date.date()]
+    recurring_events = find_recurring_events(calendar, cur_date.date())
+    all_events = (events_at_date + recurring_events)
+    all_events.sort(key=lambda x: x.begin)
+    if len(all_events) == 0:
         print(f"No events found at {cur_date.format(DATE_FORMAT)}")
     else:
-        for event in events_at_date:
-            location = event.location
-            desc = (event.description or "").strip()[0:200] + '...'
-            name = event.name
-            begin = event.begin
-            duration = event.duration
+        for e in all_events:
             cls()
-
             print("##################################################################################")
-            print(f"Event: {name}")
-            print(f"Date: {begin.naive}")
-            print(f"Duration: {duration}")
-            print(f"Description: {desc}")
+            print(f"Event: {e.name}")
+            print(f"Date: {e.begin.naive}")
+            print(f"Duration: {e.duration}")
+            print(f"Description: {e.desc}")
             while True:
                 intent = input(f"Log work to {JIRA_ISSUE} (l) or skip (s)?")
                 if intent == 'l':
-                    worklog = jira_client.add_worklog(JIRA_ISSUE, begin, duration.seconds, name, location, desc)
+                    worklog = jira_client.add_worklog(JIRA_ISSUE, e.begin, e.duration.seconds, e.name, e.location,
+                                                      e.desc)
                     print(f"Logged! {worklog.raw['self']}")
                     break
                 elif intent == 's':

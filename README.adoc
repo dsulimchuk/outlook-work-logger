@@ -5,3 +5,10 @@
 *** python main.py
 
 *** Control Panel\All Control Panel Items\Credential Manager
+
+
+```
+python -m venv venv
+.\venv\Scripts\activate.bat
+pip install -r .\requirements.txt
+```
